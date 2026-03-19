@@ -1,38 +1,67 @@
-﻿import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { isAxiosError } from "axios";
 import leftPanelArtwork from "@/assets/left-panel-artwork.svg";
 import rightTopLogo from "@/assets/right-top-logo.svg";
 import {
-  forgotUserId,
-  preAuthHandshake,
+  authenticateBlockedUserOtp,
   loginUser,
+  preAuthHandshake,
   validateOtp,
 } from "@/api/auth.api";
 import PasswordField from "@/pages/components/PasswordField";
-import { loginOtpSchema } from "@/pages/schema/login.otpSchema";
-import { loginSchema } from "@/pages/schema/login.schema";
+import { loginOtpSchema, type LoginOtpFormValues } from "@/pages/schema/login.otpSchema";
+import { loginSchema, type LoginFormValues } from "@/pages/schema/login.schema";
 import InputField from "@/shared/components/InputField";
 import { useAuthStore } from "@/store/useAuthStore";
 
-type FormErrors = {
-  username?: string;
-  password?: string;
-  otp?: string;
+type LoginLocationState = {
+  successMessage?: string;
 };
 
 export default function Login() {
   const [step, setStep] = useState<"login" | "otp">("login");
   const [loading, setLoading] = useState(false);
-  const [forgotLoading, setForgotLoading] = useState(false);
+  const [blockedLoading, setBlockedLoading] = useState(false);
+  const [showBlockedPopup, setShowBlockedPopup] = useState(false);
+  const [blockedMessage, setBlockedMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [errors, setErrors] = useState<FormErrors>({});
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [otp, setOtp] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const otpInputRef = useRef<HTMLInputElement>(null);
+
+  const loginForm = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      username: "",
+      password: "",
+    },
+  });
+
+  const otpForm = useForm<LoginOtpFormValues>({
+    resolver: zodResolver(loginOtpSchema),
+    defaultValues: {
+      username: "",
+      otp: "",
+    },
+  });
+  const blockedOtpForm = useForm<LoginOtpFormValues>({
+    resolver: zodResolver(loginOtpSchema),
+    defaultValues: {
+      username: "",
+      otp: "",
+    },
+  });
+
+  const otpValue = otpForm.watch("otp") ?? "";
 
   const { setAuth } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation() as {
+    pathname: string;
+    state: LoginLocationState | null;
+  };
 
   useEffect(() => {
     preAuthHandshake()
@@ -40,213 +69,206 @@ export default function Login() {
       .catch((err) => console.error(err));
   }, []);
 
+  useEffect(() => {
+    const nextSuccessMessage = location.state?.successMessage;
+    if (!nextSuccessMessage) return;
+
+    setSuccessMessage(nextSuccessMessage);
+    setStep("login");
+    otpForm.reset({ username: "", otp: "" });
+    loginForm.setValue("password", "");
+    blockedOtpForm.reset({ username: "", otp: "" });
+    setShowBlockedPopup(false);
+    setBlockedMessage("");
+    setErrorMessage("");
+    navigate(location.pathname, { replace: true, state: null });
+  }, [blockedOtpForm, location.pathname, location.state, loginForm, navigate, otpForm]);
+
   const handleOtpChange = (value: string) => {
-    setOtp(value);
+    const cleaned = value.replace(/\D/g, "").slice(0, 4);
+    otpForm.setValue("otp", cleaned, { shouldValidate: true, shouldDirty: true });
 
-    if (!/^\d*$/.test(value)) {
-      setErrors((current) => ({
-        ...current,
-        otp: "OTP must contain digits only.",
-      }));
+    if (value !== cleaned) {
+      otpForm.setError("otp", { message: "OTP must contain digits only." });
       return;
     }
 
-    if (value.length > 4 || (value.length > 0 && value.length < 4)) {
-      setErrors((current) => ({
-        ...current,
-        otp: "OTP must be exactly 4 digits.",
-      }));
+    if (cleaned.length > 0 && cleaned.length < 4) {
+      otpForm.setError("otp", { message: "OTP must be exactly 4 digits." });
       return;
     }
 
-    setErrors((current) => ({ ...current, otp: undefined }));
+    otpForm.clearErrors("otp");
   };
 
-  const otpDigits = Array.from({ length: 4 }, (_, index) => otp[index] ?? "");
+  const otpDigits = Array.from({ length: 4 }, (_, index) => otpValue[index] ?? "");
 
-  const handleLogin = async () => {
-    const parsedValues = loginSchema.safeParse({ username, password });
-
-    if (!parsedValues.success) {
-      const fieldErrors = parsedValues.error.flatten().fieldErrors;
-      setErrors({
-        username: fieldErrors.username?.[0],
-        password: fieldErrors.password?.[0],
-      });
-      setErrorMessage("Fix the highlighted fields and try again.");
-      return;
-    }
-
+  const handleLoginSubmit = async (values: LoginFormValues) => {
     try {
       setLoading(true);
       setErrorMessage("");
-      setErrors({});
-
-      const res = await loginUser(
-        parsedValues.data.username,
-        parsedValues.data.password
-      );
-      console.log("Login:", res);
+      setSuccessMessage("");
+      setBlockedMessage("");
+      await loginUser(values.username, values.password);
+      otpForm.reset({ username: values.username, otp: "" });
       setStep("otp");
     } catch (err) {
-      console.error(err);
+      if (isAxiosError(err)) {
+        const status = err.response?.status;
+        const apiMessage = String(
+          err.response?.data?.errors?.[0]?.errorMessage ??
+          err.response?.data?.message ??
+          ""
+        );
+
+        if ((status === 403 || status === 423) && /blocked/i.test(apiMessage)) {
+          setBlockedMessage(apiMessage || "User is blocked due to maximum login attempts.");
+          blockedOtpForm.reset({ username: values.username, otp: "" });
+          setShowBlockedPopup(true);
+          setErrorMessage("");
+          return;
+        }
+      }
       setErrorMessage("Login failed. Check your credentials and try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifyOtp = async () => {
-    const parsedValues = loginOtpSchema.safeParse({ username, otp });
-
-    if (!parsedValues.success) {
-      const fieldErrors = parsedValues.error.flatten().fieldErrors;
-      setErrors({
-        username: fieldErrors.username?.[0],
-        otp: fieldErrors.otp?.[0],
-      });
-      setErrorMessage("Fix the highlighted fields and try again.");
-      return;
-    }
-
+  const handleOtpSubmit = async (values: LoginOtpFormValues) => {
     try {
       setLoading(true);
       setErrorMessage("");
-      setErrors({});
-
-      const res = await validateOtp(
-        parsedValues.data.username,
-        Number(parsedValues.data.otp)
-      );
-      console.log("OTP:", res);
-      console.log("OTP response top-level keys:", Object.keys(res ?? {}));
-      console.log("OTP nested data keys:", Object.keys(res?.data ?? {}));
-      console.log("OTP nested result keys:", Object.keys(res?.result ?? {}));
-      console.log("OTP nested payload keys:", Object.keys(res?.payload ?? {}));
+      const res = await validateOtp(values.username, Number(values.otp));
       setAuth(res);
       navigate("/dashboard");
     } catch (err) {
-      console.error(err);
       setErrorMessage("OTP verification failed. Try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleForgotUserId = async () => {
-    try {
-      setForgotLoading(true);
-      setErrorMessage("");
-
-      const res = await forgotUserId();
-      console.log("Forgot user ID:", res);
-    } catch (err) {
-      console.error(err);
-      setErrorMessage("Forgot user ID or password request failed. Try again.");
-    } finally {
-      setForgotLoading(false);
-    }
-  };
-
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-
-    if (loading) {
-      return;
-    }
+    if (loading) return;
 
     if (step === "login") {
-      void handleLogin();
+      void loginForm.handleSubmit(handleLoginSubmit)();
       return;
     }
 
-    if (otp.length === 4) {
-      void handleVerifyOtp();
+    void otpForm.handleSubmit(handleOtpSubmit)();
+  };
+
+  const handleBlockedOtpSubmit = async (values: LoginOtpFormValues) => {
+    try {
+      setBlockedLoading(true);
+      setBlockedMessage("");
+      setErrorMessage("");
+      await authenticateBlockedUserOtp(values.username, Number(values.otp));
+      setShowBlockedPopup(false);
+      blockedOtpForm.reset({ username: "", otp: "" });
+      loginForm.setValue("username", values.username, { shouldDirty: true });
+      loginForm.setValue("password", "");
+      setSuccessMessage("User unblocked successfully. Please login again.");
+      setStep("login");
+    } catch (err) {
+      if (isAxiosError(err)) {
+        const apiMessage = String(
+          err.response?.data?.errors?.[0]?.errorMessage ??
+          err.response?.data?.message ??
+          ""
+        );
+        setBlockedMessage(apiMessage || "Failed to unblock user. Try again.");
+        return;
+      }
+      setBlockedMessage("Failed to unblock user. Try again.");
+    } finally {
+      setBlockedLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f5f7] px-3 py-3 sm:px-5 sm:py-5">
-      <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] max-w-[1100px] overflow-hidden rounded-[22px] bg-white shadow-[0_18px_70px_rgba(15,23,42,0.08)]">
-        <section className="relative hidden w-[47%] flex-col rounded-[22px] bg-[#0f62fe] text-white lg:flex">
-          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] bg-[size:24px_24px]" />
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.18),transparent_36%),linear-gradient(180deg,#2b6cf6_0%,#1157f0_100%)]" />
+    <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#f4f5f7] p-3 sm:p-5">
+      <div className="mx-auto flex h-full w-full max-w-275 overflow-hidden rounded-[22px] bg-white shadow-[0_18px_70px_rgba(15,23,42,0.08)]">
+        <section className="relative hidden w-[47%] flex-col overflow-hidden rounded-[22px] bg-[#0f62fe] text-white lg:flex">
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage: `linear-gradient(rgba(255,255,255,0.08) 1.5px, transparent 1.5px), 
+                                linear-gradient(90deg, rgba(255,255,255,0.08) 1.5px, transparent 1.5px)`,
+              backgroundSize: "14px 14px",
+              maskImage: "radial-gradient(circle at center, black 40%, transparent 90%)",
+              WebkitMaskImage: "radial-gradient(circle at center, black 40%, transparent 90%)",
+            }}
+          />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.15),transparent_40%),linear-gradient(180deg,rgba(0,0,0,0.1)_0%,transparent_100%)]" />
 
           <div className="relative z-10 flex h-full flex-col items-center justify-between px-10 py-12 text-center">
             <div className="pt-12">
-              <h1 className="text-4xl font-medium leading-tight text-white">
-                Take Charge
-                <br />
+              <h1 className="text-[26px] font-medium leading-[1.35] text-white xl:text-[28px]">
+                Take Charge <br />
                 of Your <span className="font-bold">Investments with Us</span>
               </h1>
-              <p className="mt-4 text-sm text-blue-100">"Dummy message"</p>
+              <p className="mt-4 text-sm text-blue-100 opacity-70 italic">
+                "Secure your future with Nest"
+              </p>
             </div>
 
             <div className="flex flex-1 items-center justify-center">
               <img
                 src={leftPanelArtwork}
                 alt="Investment illustration"
-                className="h-auto w-full max-w-[220px]"
+                className="h-auto w-full max-w-55"
               />
             </div>
 
             <div className="flex items-center gap-2 pb-2">
-              <span className="h-1.5 w-5 rounded-full bg-[#63552e]" />
-              <span className="h-2 w-2 rounded-full bg-white" />
-              <span className="h-2 w-2 rounded-full bg-white/75" />
+              <span className="h-1.5 w-5 rounded-full bg-[#7b6330]" />
+              <span className="h-2 w-2 rounded-full bg-white/40" />
+              <span className="h-2 w-2 rounded-full bg-white/20" />
             </div>
           </div>
         </section>
 
         <section className="flex flex-1 items-center justify-center px-7 py-10 sm:px-12 lg:px-16">
-          <div className="w-full max-w-[360px]">
-            <div className="mb-10">
-              <div className="mb-4 flex justify-start">
-                <img src={rightTopLogo} alt="Nest App logo" className="h-12 w-[46px]" />
+          <div className="w-full max-w-90">
+            <div className="mb-8">
+              <div className="mb-6 flex justify-start">
+                <img src={rightTopLogo} alt="Logo" className="h-12 w-auto" />
               </div>
-              <h2 className="text-[15px] font-semibold text-[#2f2f2f]">
-                Welcome to Nest app
-              </h2>
+              <h2 className="text-[15px] font-semibold text-[#2f2f2f]">Welcome to Nest app</h2>
             </div>
 
-            <form
-              id="login-form"
-              className="mt-8 space-y-5"
-              onSubmit={handleSubmit}
-            >
+            <form id="login-form" className="space-y-5" onSubmit={handleSubmit}>
               {step === "login" ? (
                 <>
                   <InputField
-                    label="Mobile no. / Email /Client ID"
+                    label="Mobile no. / Email / Client ID"
                     placeholder="Enter your username"
-                    value={username}
-                    onChange={(e) => {
-                      setUsername(e.target.value);
-                      setErrors((current) => ({ ...current, username: undefined }));
-                    }}
                     autoComplete="username"
-                    error={errors.username}
+                    error={loginForm.formState.errors.username?.message}
+                    {...loginForm.register("username", {
+                      onChange: () => loginForm.clearErrors("username"),
+                    })}
                   />
                   <PasswordField
                     label="Password / MPIN"
                     placeholder="Enter your password"
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      setErrors((current) => ({ ...current, password: undefined }));
-                    }}
                     autoComplete="current-password"
-                    error={errors.password}
+                    error={loginForm.formState.errors.password?.message}
+                    {...loginForm.register("password", {
+                      onChange: () => loginForm.clearErrors("password"),
+                    })}
                   />
                 </>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div>
-                    <p className="text-sm font-semibold text-[#2f2f2f]">
-                      Enter OTP
-                    </p>
+                    <p className="text-sm font-semibold text-[#2f2f2f]">Enter OTP</p>
                     <p className="mt-1 text-[11px] text-slate-400">
-                      OTP Sent on {username || "your registered account"}
+                      OTP Sent to {loginForm.getValues("username") || "your account"}
                     </p>
                   </div>
 
@@ -265,7 +287,7 @@ export default function Login() {
                             : "border-slate-100 bg-white text-slate-300",
                         ].join(" ")}
                       >
-                        {digit || "•"}
+                        {digit || "*"}
                       </span>
                     ))}
                   </button>
@@ -273,55 +295,50 @@ export default function Login() {
                   <input
                     ref={otpInputRef}
                     type="text"
-                    value={otp}
+                    value={otpValue}
                     onChange={(e) => handleOtpChange(e.target.value)}
                     inputMode="numeric"
                     maxLength={4}
                     className="sr-only"
-                    aria-label="Enter OTP"
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && otp.length === 4) {
-                        event.preventDefault();
-                        void handleVerifyOtp();
-                      }
-                    }}
                   />
-
-                  {errors.otp ? (
-                    <p className="text-xs text-red-500">{errors.otp}</p>
-                  ) : null}
+                  {otpForm.formState.errors.otp?.message && (
+                    <p className="text-xs text-red-500">{otpForm.formState.errors.otp.message}</p>
+                  )}
                 </div>
               )}
             </form>
 
-            {errorMessage ? (
-              <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-                {errorMessage}
+            {(errorMessage || successMessage) && (
+              <div
+                className={`mt-5 rounded-xl border px-4 py-3 text-sm ${
+                  errorMessage
+                    ? "border-red-200 bg-red-50 text-red-600"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {errorMessage || successMessage}
               </div>
-            ) : null}
+            )}
 
             <div className="mt-8 flex gap-3">
-              {step === "otp" ? (
+              {step === "otp" && (
                 <button
                   type="button"
                   onClick={() => {
                     setStep("login");
-                    setOtp("");
+                    otpForm.reset({ username: "", otp: "" });
                     setErrorMessage("");
-                    setErrors({});
                   }}
                   className="rounded-lg border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
                   Back
                 </button>
-              ) : null}
+              )}
 
               <button
                 type="submit"
                 form="login-form"
-
-
-                disabled={loading || (step === "otp" && otp.length !== 4)}
+                disabled={loading || (step === "otp" && otpValue.length !== 4)}
                 className="flex-1 rounded-lg bg-[#0f62fe] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b57df] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
               >
                 {loading
@@ -333,22 +350,68 @@ export default function Login() {
                     : "Verify OTP"}
               </button>
             </div>
-
-            {step === "login" ? (
-              <button
-                type="button"
-                onClick={handleForgotUserId}
-                disabled={forgotLoading}
-                className="mt-4 text-sm font-semibold text-[#0f62fe] transition hover:text-[#0b57df] disabled:cursor-not-allowed disabled:text-slate-400"
-              >
-                {forgotLoading
-                  ? "Requesting forgot user ID..."
-                  : "Forgot user ID or password?"}
-              </button>
-            ) : null}
+            {step === "login" && (
+              <div className="mt-4 flex justify-start">
+                <button
+                  type="button"
+                  onClick={() => navigate("/forget-user-id")}
+                  className="text-sm font-semibold text-[#0f62fe] transition hover:text-[#0b57df]"
+                >
+                  Forgot user ID or password?
+                </button>
+              </div>
+            )}
           </div>
         </section>
       </div>
+      {showBlockedPopup && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-[420px] rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900">User Blocked</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              {blockedMessage || "User is blocked due to maximum login attempts. Enter OTP to unblock."}
+            </p>
+
+            <form className="mt-5 space-y-4" onSubmit={blockedOtpForm.handleSubmit(handleBlockedOtpSubmit)}>
+              <InputField
+                label="Username"
+                placeholder="Enter username"
+                autoComplete="username"
+                error={blockedOtpForm.formState.errors.username?.message}
+                {...blockedOtpForm.register("username")}
+              />
+              <InputField
+                label="OTP"
+                placeholder="Enter 4-digit OTP"
+                inputMode="numeric"
+                maxLength={4}
+                error={blockedOtpForm.formState.errors.otp?.message}
+                {...blockedOtpForm.register("otp")}
+              />
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBlockedPopup(false);
+                    blockedOtpForm.reset({ username: "", otp: "" });
+                  }}
+                  className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={blockedLoading}
+                  className="flex-1 rounded-lg bg-[#0f62fe] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b57df] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                >
+                  {blockedLoading ? "Unblocking..." : "Unblock User"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

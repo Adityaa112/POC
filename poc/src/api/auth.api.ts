@@ -42,7 +42,7 @@ export const loginUser = async (username: string, password: string) => {
 
 export const validateOtp = async (username: string, otp: number) => {
   const res = await api.post(
-    "/v2/api/auth/validate-otp",
+    "/v1/api/auth/validate-otp",
     { username, otp },
     { headers: getHeaders() }
   );
@@ -50,12 +50,29 @@ export const validateOtp = async (username: string, otp: number) => {
   return res.data;
 };
 
-export const forgotUserId = async () => {
+export const authenticateBlockedUserOtp = async (
+  username: string,
+  otp: number
+) => {
+  const res = await api.post(
+    "/v1/api/auth/authenticate-otp",
+    {
+      otp,
+      username,
+      isUserBlocked: true,
+    },
+    { headers: getHeaders() }
+  );
+
+  return res.data;
+};
+
+export const forgotUserId = async (panNumber: string, emailId: string) => {
   const res = await api.post(
     "/v1/api/auth/forgot-user-id",
     {
-      panNumber: "AMITH1234A",
-      emailId: "amit.gupta@omnenest.com",
+      panNumber,
+      emailId,
     },
     { headers: getHeaders() }
   );
