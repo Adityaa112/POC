@@ -1,5 +1,5 @@
 ﻿import { api } from "./axios";
-import { getHeaders } from "@/utils/requestHeader";
+import { getHeaders } from "@/shared/api/requestHeaders";
 import { generateKeyPair, exportPublicKey } from "@/utils/crypto";
 import { useAuthStore } from "@/store/useAuthStore";
 
@@ -67,12 +67,65 @@ export const authenticateBlockedUserOtp = async (
   return res.data;
 };
 
+export const unblockUser = async (username: string, panNumber: string) => {
+  const res = await api.post(
+    "/v1/api/auth/unblock-user",
+    {
+      username,
+      panNumber,
+    },
+    { headers: getHeaders() }
+  );
+
+  return res.data;
+};
+
 export const forgotUserId = async (panNumber: string, emailId: string) => {
   const res = await api.post(
     "/v1/api/auth/forgot-user-id",
     {
       panNumber,
       emailId,
+    },
+    { headers: getHeaders() }
+  );
+
+  return res.data;
+};
+
+export const forgotPassword = async (username: string, panNumber: string) => {
+  const res = await api.post(
+    "/v1/api/auth/forgot-password",
+    {
+      username,
+      panNumber,
+    },
+    { headers: getHeaders() }
+  );
+
+  return res.data;
+};
+
+export const authenticateOtp = async (username: string, otp: number) => {
+  const res = await api.post(
+    "/v1/api/auth/authenticate-otp",
+    {
+      otp,
+      username,
+      isUserBlocked: false,
+    },
+    { headers: getHeaders() }
+  );
+
+  return res.data;
+};
+
+export const setPassword = async (username: string, password: string) => {
+  const res = await api.post(
+    "/v1/api/auth/set-password",
+    {
+      username,
+      password,
     },
     { headers: getHeaders() }
   );

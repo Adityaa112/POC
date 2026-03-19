@@ -1,6 +1,6 @@
 import type { AxiosError, InternalAxiosRequestConfig } from "axios";
 import { api } from "./axios";
-import { getHeaders } from "@/utils/requestHeader";
+import { getHeaders } from "@/shared/api/requestHeaders";
 
 // 1. Request Interceptor: Inject headers before request is sent
 api.interceptors.request.use(

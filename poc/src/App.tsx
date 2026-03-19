@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { logoutUser } from "./api/auth.api";
+import ForgetPassword from "./pages/ForgotCredentials/ForgetPassword";
 import ForgetUserId from "./pages/ForgotCredentials/ForgetUserId";
 import Login from "./pages/Login/Login";
 import ProtectedRoute from "./routes/ProtectedRoute";
@@ -50,6 +51,7 @@ const App = () => {
         {/* Public Routes: Login, Signup, etc. */}
         <Route element={<PublicRoute />}>
           <Route path="/login" element={<Login />} />
+          <Route path="/forget-password" element={<ForgetPassword />} />
           <Route path="/forget-user-id" element={<ForgetUserId />} />
         </Route>
 
