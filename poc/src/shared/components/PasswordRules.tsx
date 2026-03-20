@@ -11,7 +11,7 @@ type RuleItem = {
 
 export default function PasswordRules({
   password,
-  minLength = 10,
+  minLength = 8,
   className = "",
 }: PasswordRulesProps) {
   const rules: RuleItem[] = [
